@@ -18,14 +18,21 @@ from livekit.agents import Agent, RunContext, ChatContext, function_tool, get_jo
 
 from src.database.supabase import DBError, SupabaseDB
 from src.prompts.greetings import GREETING_INSTRUCTIONS
-from src.prompts.system import SYSTEM_INSTRUCTIONS
+from src.prompts.system import SYSTEM_INSTRUCTIONS_TEMPLATE
 from src.prompts.summary_instructions import SUMMARY_INSTRUCTIONS_TEMPLATE
-from src.utils.utils import normalize_phone, iso_to_ist_iso, now_ist_iso, IST_TZ_NAME, IST, parse_iso
+from src.utils.utils import normalize_phone, iso_to_ist_iso, now_ist_iso, IST_TZ_NAME, IST, parse_iso, get_today_ist_str, get_booking_window_end_ist_str
 
+TODAY_IST_STR = get_today_ist_str()
+BOOKING_WINDOW_END_IST_STR = get_booking_window_end_ist_str(window_days=15, inclusive=True)
+
+SYSTEM_INSTRUCTIONS = (
+    SYSTEM_INSTRUCTIONS_TEMPLATE
+    .replace("{TODAY_IST_STR}", TODAY_IST_STR)
+    .replace("{BOOKING_WINDOW_END_IST_STR}", BOOKING_WINDOW_END_IST_STR)
+)
 
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
-
 
 class EternalAgent(Agent):
     def __init__(self, db: SupabaseDB, session_id: str, summary_llm: Any, summary_model: str) -> None:
