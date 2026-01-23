@@ -21,6 +21,7 @@ from src.prompts.greetings import GREETING_INSTRUCTIONS
 from src.prompts.system import SYSTEM_INSTRUCTIONS_TEMPLATE
 from src.prompts.summary_instructions import SUMMARY_INSTRUCTIONS_TEMPLATE
 from src.utils.utils import normalize_phone, iso_to_ist_iso, now_ist_iso, IST_TZ_NAME, IST, parse_iso, get_today_ist_str, get_booking_window_end_ist_str
+from src.utils.analytics import SessionAnalytics
 
 TODAY_IST_STR = get_today_ist_str()
 BOOKING_WINDOW_END_IST_STR = get_booking_window_end_ist_str(window_days=15, inclusive=True)
@@ -35,12 +36,13 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 class EternalAgent(Agent):
-    def __init__(self, db: SupabaseDB, session_id: str, summary_llm: Any, summary_model: str) -> None:
+    def __init__(self, db: SupabaseDB, session_id: str, summary_llm: Any, summary_model: str, analytics: SessionAnalytics) -> None:
         super().__init__(instructions=SYSTEM_INSTRUCTIONS)
         self._db = db
         self._session_id = session_id
         self._summary_llm = summary_llm
         self._summary_model = summary_model
+        self._analytics = analytics
         self._contact_number: Optional[str] = None
         self._contact_name: Optional[str] = None
 
@@ -208,6 +210,7 @@ class EternalAgent(Agent):
         cn = normalize_phone(raw_cn)
 
         input_json = {"contact_number": raw_cn, "normalized_contact_number": cn, "name": name}
+
         try:
             row = await asyncio.to_thread(self._db.upsert_contact, cn, name)
             await asyncio.to_thread(self._db.set_session_contact, self._session_id, cn)
@@ -307,7 +310,6 @@ class EternalAgent(Agent):
         }
 
         try:
-            
             if not raw_cn:
                 raise DBError("Missing contact_number. Call identify_user first.")
 
@@ -524,6 +526,23 @@ class EternalAgent(Agent):
                     self._summary_model,
                     None,
                 )
+
+            try:
+                # Try to extract metrics from UsageCollector if available
+                session = getattr(self, "session", None)
+                if session and hasattr(session, "userdata"):
+                    usage_collector = session.userdata.get("usage")
+                    if usage_collector and hasattr(usage_collector, "get_summary"):
+                        try:
+                            usage_summary = usage_collector.get_summary()
+                            if usage_summary:
+                                self._analytics.ingest_usage_summary(usage_summary)
+                        except Exception:
+                            logger.exception("Failed to ingest usage summary")
+                
+                summary_payload["session_analytics"] = self._analytics.report()
+            except Exception:
+                logger.exception("Failed to attach session analytics")
 
             # Publish summary
             room = get_job_context().room

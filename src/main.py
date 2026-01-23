@@ -17,6 +17,7 @@ from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cl
 from src.agent.eternal import EternalAgent
 from src.config.config import Settings
 from src.database.supabase import SupabaseDB
+from src.utils.analytics import SessionAnalytics
 
 logger = logging.getLogger("eternal-agent")
 logging.basicConfig(level=logging.INFO)
@@ -65,12 +66,37 @@ async def entrypoint(ctx: JobContext):
         false_interruption_timeout=SETTINGS.false_interruption_timeout,
     )
 
+    analytics = SessionAnalytics()
     usage = metrics.UsageCollector()
+    session.userdata = {"analytics": analytics, "usage": usage}
 
     @session.on("metrics_collected")
     def _on_metrics(ev):
         metrics.log_metrics(ev.metrics)
         usage.collect(ev.metrics)
+
+        try:
+            raw_metrics = getattr(ev, "metrics", ev)
+            if raw_metrics:
+                class_name = raw_metrics.__class__.__name__
+                logger.info(f"[METRICS] Received metrics: {class_name}")
+                # Log ALL non-private attributes for debugging
+                all_attrs = [x for x in dir(raw_metrics) if not x.startswith('_')]
+                logger.info(f"[METRICS] {class_name} available attributes: {all_attrs}")
+                # Log key attributes with their values
+                attrs_to_check = ["duration", "duration_ms", "audio_duration", "audio_duration_ms", 
+                                 "input_tokens", "output_tokens", "characters_count", "character_count",
+                                 "usage", "type"]
+                for attr in attrs_to_check:
+                    if hasattr(raw_metrics, attr):
+                        try:
+                            val = getattr(raw_metrics, attr)
+                            logger.info(f"[METRICS] {class_name}.{attr} = {val} (type: {type(val).__name__})")
+                        except Exception as e:
+                            logger.debug(f"[METRICS] Could not read {class_name}.{attr}: {e}")
+            analytics.ingest_metrics(raw_metrics)
+        except Exception:
+            logger.exception("Failed to ingest metrics")
 
     async def _store_message(role: str, text: str, meta: dict):
         t = (text or "").strip()
@@ -128,7 +154,12 @@ async def entrypoint(ctx: JobContext):
             logger.exception("conversation_item_added handler failed")
 
     async def _log_usage():
-        logger.info("Usage summary: %s", usage.get_summary())
+        summary = usage.get_summary()
+        logger.info("Usage summary: %s", summary)
+        try:
+            analytics.ingest_usage_summary(summary)
+        except Exception:
+            logger.exception("Failed to ingest usage summary into analytics")
 
     ctx.add_shutdown_callback(_log_usage)
 
@@ -140,7 +171,13 @@ async def entrypoint(ctx: JobContext):
     )
     await avatar.start(session, room=ctx.room)
 
-    agent = EternalAgent(db=db, session_id=session_id, summary_llm=openai.LLM(model=SETTINGS.openai_model), summary_model=SETTINGS.openai_model)
+    agent = EternalAgent(
+        db=db, 
+        session_id=session_id, 
+        summary_llm=openai.LLM(model=SETTINGS.openai_model), 
+        summary_model=SETTINGS.openai_model,
+        analytics=analytics
+        )
     await session.start(room=ctx.room, agent=agent)
 
 
