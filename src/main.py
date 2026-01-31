@@ -5,6 +5,7 @@ github: https://github.com/yagnikposhiya/eternal-agent
 
 from __future__ import annotations
 
+import json
 import os
 import asyncio
 import logging
@@ -12,7 +13,7 @@ import logging
 from dotenv import load_dotenv
 from livekit.plugins import cartesia, deepgram, openai, silero, bey
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cli, metrics, ConversationItemAddedEvent
+from livekit.agents import AgentServer, AgentSession, JobContext, JobProcess, cli, metrics, ConversationItemAddedEvent, UserInputTranscribedEvent
 
 from src.agent.eternal import EternalAgent
 from src.config.config import Settings
@@ -114,6 +115,44 @@ async def entrypoint(ctx: JobContext):
             except Exception:
                 logger.exception("Background task failed")
         task.add_done_callback(_done)
+
+    def _publish_user_caption(transcript: str, is_final: bool) -> None:
+        """Publish user caption to frontend (topic: user_captions). Must await publish_data."""
+        t = (transcript or "").strip()
+        if not t:
+            return
+        payload = {
+            "type": "user_caption",
+            "transcript": t,
+            "is_final": is_final,
+        }
+        data = json.dumps(payload).encode("utf-8")
+
+        async def _send() -> None:
+            try:
+                await ctx.room.local_participant.publish_data(data, topic="user_captions")
+                logger.info("Published user_caption is_final=%s len=%d transcript=%r", is_final, len(t), t[:80] + "..." if len(t) > 80 else t)
+            except Exception:
+                logger.exception("Failed to publish user_caption")
+
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(_send())
+            _fire_and_log(task)
+        except RuntimeError:
+            logger.exception("No running event loop for user_caption publish")
+
+    @session.on("user_input_transcribed")
+    def _on_user_input_transcribed(ev: UserInputTranscribedEvent):
+        """Stream user speech as live captions (interim + final). No captions for agent."""
+        try:
+            transcript = (getattr(ev, "transcript", None) or "").strip()
+            if not transcript:
+                return
+            is_final = getattr(ev, "is_final", True)
+            _publish_user_caption(transcript, is_final)
+        except Exception:
+            logger.exception("user_input_transcribed handler failed")
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev: ConversationItemAddedEvent):
