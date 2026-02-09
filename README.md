@@ -83,3 +83,20 @@ WantedBy=multi-user.target
 6. Enable and start the agent service: `sudo systemctl enable --now eternal-agent`
 7. Check service status: `sudo systemctl status eternal-agent --no-pager`
 8. View live logs: `sudo journalctl -u eternal-agent -f`
+
+## Supabase database setup (Auto schema from migrations)
+> These steps are only valid for Linux/macOS terminals (bash/zsh). On Windows, use WSL2 or adapt the commands to PowerShell.
+
+### 1. New to Supabase CLI (Fresh setup)
+1. Download the Supabase CLI Debian package from [@supabase/cli](https://github.com/supabase/cli/releases)
+2. Install Supabase CLI using `sudo dpkg -i <package-name>.deb`
+3. Log in to Supabase CLI: `supabase login`
+4. Create a Supabase project in the browser (no CLI command – do this in the Supabase dashboard)
+5. Link this repository to your Supabase project: `supabase link --project-ref <YOUR_PROJECT_REF/YOUR_PROJECT_URL>`
+6. Apply the schema (migrations) to your project: `supabase db push`. This creates all tables, functions, and RLS policies in your Supabase project from `supabase/migrations/*.sql`.
+7. Configure backend environment variables: `cp .env.example .env`. Then edit `.env` and set `SUPABASE_URL` from your Supabase project settings.
+
+### 2. Already using Supabase CLI (Apply schema to an existing Supabase cloud project)
+1. Link this repo to your existing Supabase project (only needed once per repo/project): `supabase link --project-ref <YOUR_PROJECT_REF>`
+2. Apply the same schema from this repo to your cloud project’s database: `supabase db push`
+3. Configure backend environment variables: `cp .env.example .env`. Then edit `.env` and set `SUPABASE_URL` from your Supabase project settings.
